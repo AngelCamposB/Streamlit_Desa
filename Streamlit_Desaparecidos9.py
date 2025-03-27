@@ -14,9 +14,6 @@ import plotly.graph_objects as go
 
 from io import BytesIO
 from datetime import datetime
-from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
-from reportlab.lib.pagesizes import letter
 from statsmodels.tsa.arima.model import ARIMA
 
 # -------------------------
