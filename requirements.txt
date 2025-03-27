@@ -1,0 +1,10 @@
+dearpygui==2.0.0
+matplotlib==3.10.1
+numpy==2.2.4
+pandas==2.2.3
+plotly==6.0.0
+reportlab==3.6.13
+scikit_learn==1.6.1
+seaborn==0.13.2
+statsmodels==0.14.4
+streamlit==1.41.1
