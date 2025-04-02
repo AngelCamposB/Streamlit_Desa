@@ -1,6 +1,7 @@
 # -------------------------
 # Aplicación de Monitoreo de Personas Desaparecidas
 # -------------------------
+import re
 import os
 import time
 import signal
@@ -1367,6 +1368,260 @@ def plot_reapariciones(df: pd.DataFrame):
             porcentaje_excluidos = round((len(datos_excluidos) / len(filtro) * 100), 1)
             st.info(f"Nota: {len(datos_excluidos)} registros ({porcentaje_excluidos}%) tienen un tiempo de reaparición mayor a {max_days_for_histogram} días y no se muestran en el histograma.")
 
+# ---------------------- ANALISIS DE CONTEXTO---------------------- #
+# ---------------------------
+# Configuración global
+# ---------------------------
+CATEGORIAS_PREDEFINIDAS = {
+    'CON_PAREJA': {
+        'grupo': 'TIPO_DESAPARICION',
+        'palabras_clave': {
+            'fuga': ['FUG', 'ESCAP', 'FUE CON', 'SE FUE', 'HUY', 'ESTA', 'IBA CON', 'IRIA CON'],
+            'pareja': ['NOVIO', 'PAREJA', 'NOVIA', 'AMANTE', 'ENAMORAD', 'QUERID']
+        }
+    },
+    'CON_AMIGOS': {
+        'grupo': 'TIPO_DESAPARICION',
+        'palabras_clave': {
+            'fuga': ['FUG', 'ESCAP', 'FUE CON', 'SE FUE', 'HUY', 'ESTA', 'IBA CON', 'IRIA CON'],
+            'amistad': ['AMIG', 'AMISTAD']
+        }
+    },
+    'CONYUGUE': {
+        'grupo': 'TIPO_DESAPARICION',
+        'palabras_clave': {
+            'pareja': ['ESPOS', 'CONYUGUE', 'MARIDO']
+        }
+    },
+    'FUGA_DE_ALBERGUE': {
+        'grupo': 'TIPO_DESAPARICION',
+        'palabras_clave': {
+            'fuga': ['FUG', 'ESCAP', 'SALIO', 'NO REGRES', 'SE FUE', 'HUY'],
+            'institucion': ['ALBERGUE', 'HORFANATO', 'CAIMEDE', 'REFUGIO', 'HOGAR', 'CONVENTO', 'DIF ', 'CRIA ']
+        }
+    },
+    'INGRESO_ALBERGUE': {
+        'grupo': 'TIPO_DESAPARICION_POSIBLE_CAUSA',
+        'palabras_clave': {
+            'fuga': ['ENTR', 'INGRES', 'INTERN'],
+            'institucion': ['ALBERGUE', 'HORFANATO', 'CAIMEDE', 'REFUGIO', 'HOGAR', 'CONVENTO', 'DIF ', 'CRIA ']
+        }
+    },
+    'SALIO_DE_CASA_NO_VOLVIO': {
+        'grupo': 'HECHOS',
+        'palabras_clave': {
+            'fuga': ['FUG', 'ESCAP', 'SALIO', 'NO REGRES', 'SE FUE', 'HUY'],
+            'casa': ['CASA', 'DOMICILIO', 'FAMILIA', 'ADOLESCENTE']
+        }
+    },
+    'ADOLESCENTE_ESCAPA': {
+        'grupo': 'HECHOS',
+        'palabras_clave': {
+            'casa': ['ADOLESCENTE QUE SE ESCAPA']
+        }
+    },
+    'DISCUSION': {
+        'grupo': 'HECHOS_PREVIOS_POSIBLE_CAUSA',
+        'palabras_clave': {
+            'problema': ['DISCU', 'PELE', 'GRIT', 'ARGUMENTO', 'PROBLEMA', 'MALTRAT', 'VIOLENCIA']
+        }
+    },
+    'CRISIS_MENTAL': {
+        'grupo': 'HECHOS_PREVIOS_POSIBLE_CAUSA',
+        'palabras_clave': {
+            'crisis': ['CRISIS', 'DEPRESION', 'NERVIOS', 'ANSIEDAD', 'TRASTORNO', 'ALZHEIMER', 'DEMENCIA', 'MENTAL', 'PADEC']
+        }
+    },
+    'CENTRO_REHABILITACION': {
+        'grupo': 'TIPO_DESAPARICION',
+        'palabras_clave': {
+            'centro': ['REHABILITACION', 'ANEXO']
+        }
+    },
+    'ESTABA_PADRE_MADRE': {
+        'grupo': 'HECHOS',
+        'palabras_clave': {
+            'llevar': ['ESTA CON SU', 'ESTABA CON'],
+            'familia': ['SU PAPA', 'SU PADRE', 'SU MAMA', 'SU MADRE']
+        }
+    },
+    'LLEVADO_POR_PADRE_MADRE': {
+        'grupo': 'TIPO_DESAPARICION',
+        'palabras_clave': {
+            'llevar': ['SE LA LLEV', 'SE LO LLEV', 'SE LOS LLEV', 'SE LAS LLEV', 'CON SU HIJ', 'CON SUS HIJ', 'NIÑOS'],
+            'familia': ['SU PAPA', 'SU PADRE', 'PAREJA', 'SU MAMA', 'SU MADRE', 'ELLA']
+        }
+    },
+    'ABANDONO_HOGAR': {
+        'grupo': 'TIPO_DESAPARICION',
+        'palabras_clave': {
+            'casa': ['ABANDONO DE HOGAR']
+        }
+    },
+    'OTRO_ESTADO': {
+        'grupo': 'HECHOS',
+        'palabras_clave': {
+            'estado': ["AGUASCALIENTES", "BAJA CALIFORNIA", "BAJA CALIFORNIA SUR", "CAMPECHE", "COAHUILA", "COLIMA", "CHIAPAS",
+                       "CHIHUAHUA", "CIUDAD DE MEXICO", "DURANGO", "GUANAJUATO", "GUERRERO", "HIDALGO", "JALISCO", "ESTADO DE MEXICO",
+                       "MICHOACAN", "MORELOS", "NAYARIT", "NUEVO LEON", "OAXACA", "PUEBLA", "QUERETARO", "QUINTANA ROO", "SAN LUIS POTOSI",
+                       "SINALOA", "SONORA", "TABASCO", "TAMAULIPAS", "TLAXCALA", "VERACRUZ", "ZACATECAS"]
+        }
+    },
+    'ACTIVIDAD': {
+        'grupo': 'HECHOS_PREVIOS',
+        'palabras_clave': {
+            'actividad': ['SALIO A', 'FUE A', 'IRIA A', 'IBA A', 'RUMBO A', 'VA A', 'TRABAJ', 'ESTUDIAR', 'ESCUELA', 'UNIVERSIDAD', 'ACTIVIDAD', 'MONTAR', 'CORRER']
+        }
+    },
+    'DETENCION': {
+        'grupo': 'TIPO_DESAPARICION_POSIBLE_CAUSA',
+        'palabras_clave': {
+            'actividad': ['ESTAB', 'FUE', 'ESTUVO', 'IBA', 'LLEVAN', 'ENCONTRABA', 'DELITO'],
+            'detencion': ['DETENID', 'ARRESTAD', 'RECLUID', 'CERESO']
+        }
+    },
+    'EBRIEDAD_DROGAS': {
+        'grupo': 'HECHOS_PREVIOS_POSIBLE_CAUSA',
+        'palabras_clave': {
+            'sustancias': ['ALCOHOL', 'EBRI', 'BORRACH', 'EMBRIAG', 'BEBID', 'TOMANDO', 'ALCO',
+                            'DROGA', 'DROGAD', 'SUSTANCIA', 'ESTUPEFACIENTE', 'INTOXICA', 'BEBIENDO',
+                            'MARIHUANA', 'COCAINA', 'PASTILLAS', 'CRACK', 'METANFETAMINA']
+        }
+    }
+}
+
+GRUPOS_CATEGORIAS = {info['grupo'] for info in CATEGORIAS_PREDEFINIDAS.values()}
+COLORES_GRUPOS = {
+    'TIPO_DESAPARICION': '#4E79A7',
+    'TIPO_DESAPARICION_POSIBLE_CAUSA': '#F28E2B',
+    'HECHOS': '#E15759',
+    'HECHOS_PREVIOS': '#76B7B2',
+    'HECHOS_PREVIOS_POSIBLE_CAUSA': '#59A14F'
+}
+
+# ---------------------------
+# Funciones de Procesamiento
+# ---------------------------
+def categorizar_registros(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Añade columnas de categorías y grupos a partir de DD_HECHOS.
+    """
+    if df is None or df.empty:
+        return None
+
+    df_categorizado = df.copy()
+    df_categorizado['DD_HECHOS'] = df_categorizado['DD_HECHOS'].astype(str).str.upper()
+
+    # Inicializar columnas de categorías y grupos
+    for categoria in CATEGORIAS_PREDEFINIDAS.keys():
+        df_categorizado[categoria] = 0
+    for grupo in GRUPOS_CATEGORIAS:
+        df_categorizado[f'GRUPO_{grupo}'] = 0
+
+    # Procesar cada registro
+    for idx, row in df_categorizado.iterrows():
+        descripcion = row['DD_HECHOS']
+        for categoria, info in CATEGORIAS_PREDEFINIDAS.items():
+            palabras_clave = info['palabras_clave']
+            if all(any(re.search(r'\b' + palabra, descripcion) for palabra in lista)
+                   for lista in palabras_clave.values()):
+                df_categorizado.at[idx, categoria] = 1
+                df_categorizado.at[idx, f'GRUPO_{info["grupo"]}'] = 1
+
+    df_categorizado['TOTAL_CATEGORIAS'] = df_categorizado[list(CATEGORIAS_PREDEFINIDAS.keys())].sum(axis=1)
+    df_categorizado['CATEGORIAS_DETECTADAS'] = df_categorizado.apply(
+        lambda row: ', '.join([cat for cat in CATEGORIAS_PREDEFINIDAS.keys() if row[cat] == 1]) or 'SIN_CATEGORIA',
+        axis=1
+    )
+    return df_categorizado
+
+# ---------------------------
+# Funciones de Visualización Interactiva con Plotly
+# ---------------------------
+def plot_resumen_categorias(df_categorizado: pd.DataFrame):
+    resumen = df_categorizado[list(CATEGORIAS_PREDEFINIDAS.keys())].sum().sort_values(ascending=False).reset_index()
+    resumen.columns = ['Categoria', 'Total']
+    resumen['Grupo'] = resumen['Categoria'].apply(lambda cat: CATEGORIAS_PREDEFINIDAS[cat]['grupo'])
+    fig = px.bar(resumen, x='Categoria', y='Total', color='Grupo',
+                 text='Total', color_discrete_map=COLORES_GRUPOS)
+    fig.update_layout(title="Distribución de registros por categoría", xaxis_tickangle=-45)
+    return fig
+
+def plot_resumen_por_grupo(df_categorizado: pd.DataFrame):
+    figs = {}
+    for grupo in GRUPOS_CATEGORIAS:
+        cats = [cat for cat, info in CATEGORIAS_PREDEFINIDAS.items() if info['grupo'] == grupo]
+        if not cats:
+            continue
+        data = pd.DataFrame({
+            'Categoria': cats,
+            'Total': [df_categorizado[cat].sum() for cat in cats]
+        })
+        fig = px.bar(data, x='Categoria', y='Total', text='Total',
+                     color_discrete_sequence=[COLORES_GRUPOS[grupo]])
+        fig.update_layout(title=f"Registros por categoría - Grupo: {grupo}", xaxis_tickangle=-45)
+        figs[grupo] = fig
+    return figs
+
+def plot_comparativa_grupos(df_categorizado: pd.DataFrame):
+    conteo = {grupo: df_categorizado[f'GRUPO_{grupo}'].sum() for grupo in GRUPOS_CATEGORIAS}
+    data = pd.DataFrame({
+        'Grupo': list(conteo.keys()),
+        'Total': list(conteo.values())
+    })
+    fig = px.bar(data, x='Grupo', y='Total', text='Total', color='Grupo',
+                 color_discrete_map=COLORES_GRUPOS)
+    fig.update_layout(title="Comparativa de registros por grupo de categorías", xaxis_tickangle=-45)
+    return fig
+
+def plot_distribucion_sin_categoria(df_categorizado: pd.DataFrame):
+    con_cat = (df_categorizado['TOTAL_CATEGORIAS'] > 0).sum()
+    sin_cat = (df_categorizado['TOTAL_CATEGORIAS'] == 0).sum()
+    data = pd.DataFrame({
+        'Estado': ['Con categoría', 'Sin categoría'],
+        'Total': [con_cat, sin_cat]
+    })
+    fig = px.pie(data, names='Estado', values='Total',
+                 title="Distribución de registros categorizados vs no categorizados",
+                 color_discrete_sequence=['#66b3ff', '#ff9999'])
+    return fig
+
+def plot_heatmap_categorias_por_grupo(df_categorizado: pd.DataFrame):
+    # Crear matriz: filas=grupo, columnas=categoría
+    data = {}
+    for grupo in GRUPOS_CATEGORIAS:
+        row = {}
+        for cat, info in CATEGORIAS_PREDEFINIDAS.items():
+            if info['grupo'] == grupo:
+                row[cat] = df_categorizado[cat].sum()
+        data[grupo] = row
+    df_heatmap = pd.DataFrame(data).T
+    fig = px.imshow(df_heatmap, text_auto=True, aspect="auto", color_continuous_scale="YlGnBu",
+                    title="Mapa de calor: Distribución de categorías por grupo")
+    return fig
+
+def mostrar_ejemplos_por_categoria(df_categorizado: pd.DataFrame, num_ejemplos=3):
+    st.markdown("### Ejemplos de registros por categoría")
+    # Organiza las categorías por grupo
+    categorias_por_grupo = {}
+    for cat, info in CATEGORIAS_PREDEFINIDAS.items():
+        categorias_por_grupo.setdefault(info['grupo'], []).append(cat)
+
+    for grupo, categorias in categorias_por_grupo.items():
+        st.markdown(f"#### Grupo: {grupo}")
+        for cat in categorias:
+            registros = df_categorizado[df_categorizado[cat] == 1]
+            if not registros.empty:
+                st.markdown(f"**Categoría: {cat}** (Total: {len(registros)} registros)")
+                muestra = registros.sample(min(num_ejemplos, len(registros)))
+                for i, (_, row) in enumerate(muestra.iterrows(), 1):
+                    desc = row['DD_HECHOS']
+                    if len(desc) > 300:
+                        desc = desc[:300] + "..."
+                    st.markdown(f"*Ejemplo {i}:* {desc}  \n_Otras categorías:_ {row['CATEGORIAS_DETECTADAS']}")
+            else:
+                st.markdown(f"**Categoría: {cat}** - No se encontraron registros.")
+
 
 # -------------------------
 # Tabla Registro Estatal (Denuncias)
@@ -1508,6 +1763,47 @@ def tab_demograficos(data):
     plot_estado_distribution(data)
     st.markdown("---")
 
+def tab_analisis_contexto(data: pd.DataFrame):
+    st.header("Análisis de Categorías y Contexto")
+    
+    # Filtrar por año si existe la columna de fecha de desaparición
+    if "CI_FECDEN" in data.columns:
+        #data["DD_FECDESAP"] = pd.to_datetime(data["DD_FECDESAP"], errors='coerce')
+        data = data.dropna(subset=["CI_FECDEN"])
+        data["AÑO_DENUNCIA"] = data["CI_FECDEN"].dt.year
+        min_year = int(data["AÑO_DENUNCIA"].min())
+        max_year = int(data["AÑO_DENUNCIA"].max())
+        selected_range = st.slider("Analisis Contexto (Denuncias)", min_year, max_year, (min_year, max_year))
+        data_filtered = data[(data["AÑO_DENUNCIA"] >= selected_range[0]) & 
+                             (data["AÑO_DENUNCIA"] <= selected_range[1])]
+    else:
+        st.warning("La columna 'CI_FECDEN' no se encontró. Se usarán todos los datos.")
+        data_filtered = data
+
+    # Procesar y categorizar registros
+    df_categorizado = categorizar_registros(data_filtered)
+    if df_categorizado is None:
+        st.error("No se pudieron categorizar los registros.")
+        return
+
+    st.subheader("Resumen de Categorías")
+    st.plotly_chart(plot_resumen_categorias(df_categorizado), use_container_width=True)
+
+    st.subheader("Resumen por Grupo")
+    figs_por_grupo = plot_resumen_por_grupo(df_categorizado)
+    for grupo, fig in figs_por_grupo.items():
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Comparativa de Grupos")
+    st.plotly_chart(plot_comparativa_grupos(df_categorizado), use_container_width=True)
+
+    st.subheader("Distribución con/ sin Categoría")
+    st.plotly_chart(plot_distribucion_sin_categoria(df_categorizado), use_container_width=True)
+
+    st.subheader("Heatmap de Categorías por Grupo")
+    st.plotly_chart(plot_heatmap_categorias_por_grupo(df_categorizado), use_container_width=True)
+
+    mostrar_ejemplos_por_categoria(df_categorizado, num_ejemplos=3)
 
 # -------------------------
 # Función principal
@@ -1609,7 +1905,7 @@ def main():
             st.stop()  # Detiene la ejecución del script actual
     ###################################
     # Crear pestañas
-    tabs = st.tabs(["Desapariciones", "Reapariciones", "Demográficos"])
+    tabs = st.tabs(["Desapariciones", "Reapariciones", "Demográficos", "Analisís de Contexto"])
     
     # Contenido de cada pestaña
     with tabs[0]:
@@ -1620,6 +1916,9 @@ def main():
     
     with tabs[2]:
         tab_demograficos(data_filtered)
+        
+    with tabs[3]:
+        tab_analisis_contexto(data_filtered)
 
 if __name__ == '__main__':
     main()
