@@ -1554,7 +1554,7 @@ def ejecutar_prediccion_arima(data):
         with col2:
             st.markdown("""
             **📊 Confiabilidad Temporal:**
-            - **1-2 años:** Alta confiabilidad
+            - **1-2 años:** Buena confiabilidad
             - **3-5 años:** Confiabilidad moderada  
             - **>5 años:** Usar con precaución
             - **Factores externos:** Pueden alterar predicciones
